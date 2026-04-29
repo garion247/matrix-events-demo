@@ -1,0 +1,72 @@
+name: Conditional Deployment
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      force_environment:
+        description: 'Force deploy to this environment'
+        required: false
+        type: choice
+        default: ''
+        options: [ '', development, staging, production ]
+
+jobs:
+  strategy:
+    runs-on: ubuntu-latest
+    outputs:
+      should-deploy: ${{ steps.decide.outputs.should-deploy }}
+      environment:   ${{ steps.decide.outputs.environment }}
+    steps:
+      - id: decide
+        run: |
+          SHOULD_DEPLOY="false"
+          ENV="none"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
+              && [ -n "${{ inputs.force_environment }}" ]; then
+            SHOULD_DEPLOY="true"
+            ENV="${{ inputs.force_environment }}"
+          elif [ "${{ github.event_name }}" = "push" ] \
+              && [ "${{ github.ref }}" = "refs/heads/master" ]; then
+            SHOULD_DEPLOY="true"
+            ENV="production"
+          fi
+
+          echo "should-deploy=$SHOULD_DEPLOY" >> "$GITHUB_OUTPUT"
+          echo "environment=$ENV"             >> "$GITHUB_OUTPUT"
+          echo "Decision: deploy=$SHOULD_DEPLOY env=$ENV"
+
+  test:
+    needs: strategy
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [ unit, integration ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run ${{ matrix.suite }} tests
+        run: |
+          echo "Running ${{ matrix.suite }} tests..."
+          npm test
+
+  deploy:
+    needs: [ strategy, test ]
+    if: needs.strategy.outputs.should-deploy == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.strategy.outputs.environment }}
+    steps:
+      - name: Deploy
+        env:
+          NODE_ENV: ${{ needs.strategy.outputs.environment }}
+        run: |
+          echo "Deploying to ${{ needs.strategy.outputs.environment }} (event: ${{ github.event_name }})"
+          npm run build
+          echo "Deployment complete"
