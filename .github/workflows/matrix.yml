@@ -5,16 +5,47 @@ on:
     branches: [ master ]
   pull_request:
     branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      include_experimental:
+        description: 'Add Node 21 (experimental)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
+  setup-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+    steps:
+      - name: Build matrix from context
+        id: build
+        run: |
+          # Always test Node 18 and 20 on Ubuntu
+          MATRIX='{"node-version":["18","20"],"os":["ubuntu-latest"]}'
+
+          # Add Windows when running on master
+          if [ "${{ github.ref }}" = "refs/heads/master" ]; then
+            MATRIX=$(echo "$MATRIX" | jq -c '.os += ["windows-latest"]')
+          fi
+
+          # Add Node 21 when the workflow_dispatch input requests it
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
+              && [ "${{ inputs.include_experimental }}" = "true" ]; then
+            MATRIX=$(echo "$MATRIX" | jq -c '."node-version" += ["21"]')
+          fi
+
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "Generated matrix: $MATRIX"
+
   test:
+    needs: setup-matrix
     name: Test (Node ${{ matrix.node-version }} on ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      matrix:
-        node-version: [ 18, 20 ]
-        os: [ ubuntu-latest ]
+      matrix: ${{ fromJSON(needs.setup-matrix.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -22,11 +53,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-
-      - name: Show context
-        run: |
-          echo "OS: ${{ matrix.os }}"
-          echo "Node: $(node --version)"
 
       - name: Run tests
         run: npm test
